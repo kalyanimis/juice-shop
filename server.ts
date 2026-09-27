@@ -111,6 +111,7 @@ import { likeProductReviews } from './routes/likeProductReviews'
 import { repeatNotification } from './routes/repeatNotification'
 import { serveQuarantineFiles } from './routes/quarantineServer'
 import { showProductReviews } from './routes/showProductReviews'
+import { basketSummary } from './routes/basketSummary'
 import { nftMintListener, walletNFTVerify } from './routes/nftMint'
 import { createProductReviews } from './routes/createProductReviews'
 import { getWalletBalance, addWalletBalance } from './routes/wallet'
@@ -620,6 +621,7 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
   app.get('/rest/user/authentication-details', utils.asyncHandler(authenticatedUsers()))
   app.get('/rest/products/search', utils.asyncHandler(searchProducts()))
   app.get('/rest/basket/:id', utils.asyncHandler(retrieveBasket()))
+  app.get('/rest/basket/:id/summary', utils.asyncHandler(basketSummary()))
   app.post('/rest/basket/:id/checkout', placeOrder())
   app.put('/rest/basket/:id/coupon/:coupon', utils.asyncHandler(applyCoupon()))
   app.get('/rest/admin/application-version', utils.asyncHandler(retrieveAppVersion()))
