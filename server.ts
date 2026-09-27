@@ -111,6 +111,7 @@ import { likeProductReviews } from './routes/likeProductReviews'
 import { repeatNotification } from './routes/repeatNotification'
 import { serveQuarantineFiles } from './routes/quarantineServer'
 import { showProductReviews } from './routes/showProductReviews'
+import { exportOrdersCsv, downloadOrderExport } from './routes/orderExport'
 import { nftMintListener, walletNFTVerify } from './routes/nftMint'
 import { createProductReviews } from './routes/createProductReviews'
 import { getWalletBalance, addWalletBalance } from './routes/wallet'
@@ -649,6 +650,9 @@ function configureApp (app: ReturnType<typeof express>, seq: typeof sequelize) {
   app.get('/rest/memories', utils.asyncHandler(getMemories()))
   /* NoSQL API endpoints */
   app.get('/rest/products/:id/reviews', showProductReviews())
+  /* Order export for accounting */
+  app.get('/rest/order-export', exportOrdersCsv())
+  app.get('/rest/order-export/:file', downloadOrderExport())
   app.put('/rest/products/:id/reviews', utils.asyncHandler(createProductReviews()))
   app.patch('/rest/products/reviews', security.isAuthorized(), updateProductReviews())
   app.post('/rest/products/reviews', security.isAuthorized(), utils.asyncHandler(likeProductReviews()))
