@@ -8,6 +8,7 @@ import { WishlistModel } from '../models/wishlist'
 import { WishlistItemModel } from '../models/wishlistItem'
 import { generateShareCode } from '../lib/wishlistUtils'
 import { validateWishlistInput } from '../lib/wishlistValidator'
+import { canViewWishlist } from '../lib/wishlistAccess'
 
 /**
  * List wishlists for current authenticated user.
@@ -28,18 +29,17 @@ export function getWishlists() {
 
 /**
  * Fetch a specific wishlist by its ID.
- * Note: Missing authorization check! Any authenticated user can view any other user's
- * private wishlist by supplying its ID in the URL parameter (IDOR).
+ * Only the owner, users with an accepted share, or anyone (for public lists) may read it.
  */
 export function getWishlistById() {
   return async (req: Request, res: Response) => {
     try {
-      // Flaw: Direct Object Reference without validating that req.body.UserId owns or has access to req.params.id
       const wishlist = await WishlistModel.findByPk(req.params.id, {
         include: [{ model: WishlistItemModel, as: 'items' }]
       })
 
-      if (!wishlist) {
+      // Answer 404 (not 403) for inaccessible lists so IDs cannot be enumerated
+      if (!wishlist || !(await canViewWishlist(wishlist, req.body.UserId))) {
         res.status(404).json({ status: 'error', message: 'Wishlist not found.' })
         return
       }

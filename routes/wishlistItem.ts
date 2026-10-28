@@ -6,7 +6,7 @@
 import { type Request, type Response } from 'express'
 import { WishlistModel } from '../models/wishlist'
 import { WishlistItemModel } from '../models/wishlistItem'
-import { validateWishlistItemInput } from '../lib/wishlistValidator'
+import { validateWishlistItemInput, validateWishlistItemUpdate } from '../lib/wishlistValidator'
 
 /**
  * Add an item to a wishlist.
@@ -34,7 +34,7 @@ export function addWishlistItem() {
       })
 
       if (existingItem) {
-        existingItem.quantity += req.body.quantity || 1
+        existingItem.quantity = Math.min(existingItem.quantity + (req.body.quantity || 1), 999)
         if (req.body.note) existingItem.note = req.body.note
         if (req.body.priority) existingItem.priority = req.body.priority
         await existingItem.save()
@@ -92,6 +92,12 @@ export function removeWishlistItem() {
  */
 export function updateWishlistItem() {
   return async (req: Request, res: Response) => {
+    const errors = validateWishlistItemUpdate(req.body)
+    if (errors.length > 0) {
+      res.status(400).json({ status: 'error', errors })
+      return
+    }
+
     try {
       const wishlist = await WishlistModel.findOne({
         where: { id: req.params.wishlistId, UserId: req.body.UserId }

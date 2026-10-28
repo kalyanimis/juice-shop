@@ -6,9 +6,11 @@
 import { type Request, type Response } from 'express'
 import { WishlistModel } from '../models/wishlist'
 import { WishlistShareModel } from '../models/wishlistShare'
-import { generateInviteToken } from '../lib/wishlistUtils'
+import { UserModel } from '../models/user'
+import { generateInviteToken, isValidPermission } from '../lib/wishlistUtils'
 import { isValidEmail } from '../lib/wishlistValidator'
 import { sendWishlistNotification } from '../lib/wishlistNotifier'
+import logger from '../lib/logger'
 
 /**
  * Share a wishlist with a user via email invite.
@@ -16,8 +18,12 @@ import { sendWishlistNotification } from '../lib/wishlistNotifier'
 export function shareWishlist() {
   return async (req: Request, res: Response) => {
     const { email, permission } = req.body
-    if (!email || !isValidEmail(email)) {
+    if (!email || typeof email !== 'string' || !isValidEmail(email)) {
       res.status(400).json({ status: 'error', message: 'Valid recipient email is required.' })
+      return
+    }
+    if (permission !== undefined && (typeof permission !== 'string' || !isValidPermission(permission))) {
+      res.status(400).json({ status: 'error', message: 'Permission must be one of: read, write, admin.' })
       return
     }
 
@@ -36,7 +42,7 @@ export function shareWishlist() {
 
       const share = await WishlistShareModel.create({
         WishlistId: wishlist.id,
-        sharedWithEmail: email,
+        sharedWithEmail: email.toLowerCase(),
         permission: permission || 'read',
         inviteToken,
         accepted: false,
@@ -51,20 +57,24 @@ export function shareWishlist() {
         inviteLink: `/wishlist/accept-invite?token=${inviteToken}`
       })
 
-      res.status(201).json({ status: 'success', data: share })
+      // The invite token is only delivered to the recipient, never echoed back to the inviter
+      const { inviteToken: _omitted, ...safeShare } = share.toJSON()
+      res.status(201).json({ status: 'success', data: safeShare })
     } catch (err: unknown) {
-      res.status(500).json({ status: 'error', message: (err as Error).message })
+      logger.error(`Failed to share wishlist: ${(err as Error).message}`)
+      res.status(500).json({ status: 'error', message: 'Could not share wishlist.' })
     }
   }
 }
 
 /**
  * Accept a wishlist invitation using an invite token.
+ * The authenticated user's e-mail address must match the address that was invited.
  */
 export function acceptWishlistInvite() {
   return async (req: Request, res: Response) => {
     const { token } = req.body
-    if (!token) {
+    if (!token || typeof token !== 'string') {
       res.status(400).json({ status: 'error', message: 'Invite token is required.' })
       return
     }
@@ -79,6 +89,13 @@ export function acceptWishlistInvite() {
         return
       }
 
+      const user = await UserModel.findByPk(req.body.UserId)
+      if (!user?.email || user.email.toLowerCase() !== share.sharedWithEmail.toLowerCase()) {
+        // Same response as an unknown token so tokens cannot be probed
+        res.status(404).json({ status: 'error', message: 'Invalid or expired invitation token.' })
+        return
+      }
+
       if (share.expiresAt && new Date() > share.expiresAt) {
         res.status(410).json({ status: 'error', message: 'Invitation has expired.' })
         return
@@ -87,25 +104,38 @@ export function acceptWishlistInvite() {
       share.accepted = true
       await share.save()
 
-      res.status(200).json({ status: 'success', message: 'Invitation accepted successfully.', data: share })
+      const { inviteToken: _omitted, ...safeShare } = share.toJSON()
+      res.status(200).json({ status: 'success', message: 'Invitation accepted successfully.', data: safeShare })
     } catch (err: unknown) {
-      res.status(500).json({ status: 'error', message: (err as Error).message })
+      logger.error(`Failed to accept wishlist invite: ${(err as Error).message}`)
+      res.status(500).json({ status: 'error', message: 'Could not accept invitation.' })
     }
   }
 }
 
 /**
- * List all active shares for a wishlist.
+ * List all active shares for a wishlist. Only the owner may see them.
  */
 export function getWishlistShares() {
   return async (req: Request, res: Response) => {
     try {
+      const wishlist = await WishlistModel.findOne({
+        where: { id: req.params.wishlistId, UserId: req.body.UserId }
+      })
+
+      if (!wishlist) {
+        res.status(404).json({ status: 'error', message: 'Wishlist not found or access denied.' })
+        return
+      }
+
       const shares = await WishlistShareModel.findAll({
-        where: { WishlistId: req.params.wishlistId }
+        where: { WishlistId: wishlist.id },
+        attributes: { exclude: ['inviteToken'] }
       })
       res.status(200).json({ status: 'success', data: shares })
     } catch (err: unknown) {
-      res.status(500).json({ status: 'error', message: (err as Error).message })
+      logger.error(`Failed to list wishlist shares: ${(err as Error).message}`)
+      res.status(500).json({ status: 'error', message: 'Could not load shares.' })
     }
   }
 }

@@ -4,31 +4,33 @@
  */
 
 import { type Request, type Response } from 'express'
+import { Op } from 'sequelize'
 import { WishlistModel } from '../models/wishlist'
+import logger from '../lib/logger'
 
 /**
  * Search public wishlists by query string.
- * Flaw: SQL Injection vulnerability! The query string parameter is concatenated directly
- * into raw SQL without parameterization or escaping.
+ * The search term is passed to Sequelize as a bound parameter, never concatenated into SQL.
  */
 export function searchWishlists() {
   return async (req: Request, res: Response) => {
-    const searchTerm = req.query.q as string
+    const searchTerm = req.query.q
 
-    if (!searchTerm) {
+    if (typeof searchTerm !== 'string' || searchTerm.length === 0) {
       res.status(400).json({ status: 'error', message: 'Search query parameter q is required.' })
       return
     }
 
     try {
-      // Flaw: Unsanitized input concatenated directly into raw SQL query
-      const sqlQuery = `SELECT id, title, description, shareCode, createdAt FROM Wishlists WHERE isPublic = 1 AND title LIKE '%${searchTerm}%' ORDER BY createdAt DESC`
-
-      if (!WishlistModel.sequelize) {
-        throw new Error('Database connection not initialized')
-      }
-
-      const [results] = await WishlistModel.sequelize.query(sqlQuery)
+      const results = await WishlistModel.findAll({
+        attributes: ['id', 'title', 'description', 'shareCode', 'createdAt'],
+        where: {
+          isPublic: true,
+          title: { [Op.like]: `%${searchTerm}%` }
+        },
+        order: [['createdAt', 'DESC']],
+        limit: 100
+      })
 
       res.status(200).json({
         status: 'success',
@@ -36,30 +38,36 @@ export function searchWishlists() {
         data: results
       })
     } catch (err: unknown) {
-      res.status(500).json({ status: 'error', message: (err as Error).message })
+      logger.error(`Wishlist search failed: ${(err as Error).message}`)
+      res.status(500).json({ status: 'error', message: 'Search failed.' })
     }
   }
 }
 
 /**
- * Filter wishlists by tags and sorting preferences.
+ * Filter wishlists by sorting preferences.
  */
 export function filterWishlists() {
   return async (req: Request, res: Response) => {
-    const { sortBy = 'recent', limit = 20, offset = 0 } = req.query
+    const { sortBy = 'recent' } = req.query
+    const parsedLimit = Number.parseInt(String(req.query.limit ?? 20), 10)
+    const parsedOffset = Number.parseInt(String(req.query.offset ?? 0), 10)
+    const limit = Number.isNaN(parsedLimit) ? 20 : Math.min(Math.max(parsedLimit, 1), 100)
+    const offset = Number.isNaN(parsedOffset) ? 0 : Math.max(parsedOffset, 0)
 
     try {
       const orderColumn = sortBy === 'title' ? 'title' : 'createdAt'
       const wishlists = await WishlistModel.findAll({
         where: { isPublic: true },
-        limit: Math.min(Number(limit), 100),
-        offset: Number(offset),
+        limit,
+        offset,
         order: [[orderColumn, 'DESC']]
       })
 
       res.status(200).json({ status: 'success', data: wishlists })
     } catch (err: unknown) {
-      res.status(500).json({ status: 'error', message: (err as Error).message })
+      logger.error(`Wishlist filter failed: ${(err as Error).message}`)
+      res.status(500).json({ status: 'error', message: 'Could not load wishlists.' })
     }
   }
 }

@@ -28,6 +28,13 @@ export function isValidVisibility(visibility: string): visibility is WishlistVis
 }
 
 /**
+ * Check if the given permission string is valid.
+ */
+export function isValidPermission(permission: string): permission is WishlistPermission {
+  return ['read', 'write', 'admin'].includes(permission)
+}
+
+/**
  * Check if a permission grants editing capability.
  */
 export function canEditWishlist(permission: WishlistPermission): boolean {
@@ -66,6 +73,11 @@ export function formatWishlistItemCsv(item: {
   priority: string
   note?: string
 }): string {
-  const sanitize = (val: string) => `"${(val || '').replace(/"/g, '""')}"`
-  return `${item.id},${sanitize(item.productName)},${item.quantity},${item.priority},${sanitize(item.note ?? '')}`
+  // Quote every text field and neutralise spreadsheet formula prefixes (CSV injection)
+  const sanitize = (val: string) => {
+    const text = String(val ?? '')
+    const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text
+    return `"${safe.replace(/"/g, '""')}"`
+  }
+  return `${item.id},${sanitize(item.productName)},${item.quantity},${sanitize(item.priority)},${sanitize(item.note ?? '')}`
 }

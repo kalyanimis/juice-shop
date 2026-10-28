@@ -4,15 +4,16 @@
  */
 
 import { type Request, type Response } from 'express'
+import { fn, col } from 'sequelize'
 import { WishlistModel } from '../models/wishlist'
 import { WishlistItemModel } from '../models/wishlistItem'
 import { ProductModel } from '../models/product'
 import { WishlistShareModel } from '../models/wishlistShare'
+import logger from '../lib/logger'
 
 /**
  * Generate analytics and summary stats for a user's wishlists.
- * Flaw: Severe N+1 query pattern! For each wishlist, it queries its items individually in a loop,
- * and then for each item queries the product record individually in a nested loop.
+ * Uses three batched queries (items, products, share counts) regardless of how many wishlists exist.
  */
 export function getWishlistSummaryStats() {
   return async (req: Request, res: Response) => {
@@ -20,24 +21,38 @@ export function getWishlistSummaryStats() {
       const wishlists = await WishlistModel.findAll({
         where: { UserId: req.body.UserId }
       })
+      const wishlistIds = wishlists.map((w) => w.id)
+
+      const items = wishlistIds.length === 0
+        ? []
+        : await WishlistItemModel.findAll({ where: { WishlistId: wishlistIds } })
+      const shareCounts = wishlistIds.length === 0
+        ? []
+        : await WishlistShareModel.findAll({
+          attributes: ['WishlistId', [fn('COUNT', col('id')), 'count']],
+          where: { WishlistId: wishlistIds },
+          group: ['WishlistId'],
+          raw: true
+        }) as unknown as Array<{ WishlistId: number, count: number | string }>
+
+      const productIds = [...new Set(items.map((item) => item.ProductId))]
+      const products = productIds.length === 0
+        ? []
+        : await ProductModel.findAll({ where: { id: productIds } })
+      const productById = new Map(products.map((p) => [p.id, p]))
+      const shareCountByWishlist = new Map(shareCounts.map((s) => [s.WishlistId, Number(s.count)]))
 
       const summaries = []
       let grandTotalItems = 0
       let grandTotalValue = 0
 
-      // Flaw: N+1 query problem - sequential queries inside loop over wishlists
       for (const wishlist of wishlists) {
-        // Individual query per wishlist:
-        const items = await WishlistItemModel.findAll({
-          where: { WishlistId: wishlist.id }
-        })
-
+        const listItems = items.filter((item) => item.WishlistId === wishlist.id)
         let listTotalValue = 0
         const detailedItems = []
 
-        // Nested N+1: Individual query per item inside the loop
-        for (const item of items) {
-          const product = await ProductModel.findByPk(item.ProductId)
+        for (const item of listItems) {
+          const product = productById.get(item.ProductId)
           if (product) {
             const itemCost = (product.price || 0) * item.quantity
             listTotalValue += itemCost
@@ -51,20 +66,15 @@ export function getWishlistSummaryStats() {
           }
         }
 
-        // Another query inside the loop for shares:
-        const shareCount = await WishlistShareModel.count({
-          where: { WishlistId: wishlist.id }
-        })
-
-        grandTotalItems += items.length
+        grandTotalItems += listItems.length
         grandTotalValue += listTotalValue
 
         summaries.push({
           wishlistId: wishlist.id,
           title: wishlist.title,
-          itemCount: items.length,
+          itemCount: listItems.length,
           totalValue: listTotalValue,
-          shareCount,
+          shareCount: shareCountByWishlist.get(wishlist.id) ?? 0,
           items: detailedItems
         })
       }
@@ -75,12 +85,13 @@ export function getWishlistSummaryStats() {
           totalWishlists: wishlists.length,
           grandTotalItems,
           grandTotalValue,
-          averageItemsPerWishlist: wishlists.length > 0 ? (grandTotalItems / wishlists.length).toFixed(1) : 0,
+          averageItemsPerWishlist: wishlists.length > 0 ? Number((grandTotalItems / wishlists.length).toFixed(1)) : 0,
           wishlists: summaries
         }
       })
     } catch (err: unknown) {
-      res.status(500).json({ status: 'error', message: (err as Error).message })
+      logger.error(`Wishlist analytics failed: ${(err as Error).message}`)
+      res.status(500).json({ status: 'error', message: 'Could not compute wishlist statistics.' })
     }
   }
 }
